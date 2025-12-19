@@ -1,3 +1,8 @@
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/wait.h>
+#include <sys/types.h>
+#include <fcntl.h>
 #include "systemcalls.h"
 
 /**
@@ -10,14 +15,19 @@
 bool do_system(const char *cmd)
 {
 
-/*
- * TODO  add your code here
- *  Call the system() function with the command set in the cmd
- *   and return a boolean true if the system() call completed with success
- *   or false() if it returned a failure
-*/
+    /*
+     *  Call the system() function with the command set in the cmd
+     *  and return a boolean true if the system() call completed with success
+     *  or false() if it returned a failure
+     */
+    int ret = system(cmd);
 
-    return true;
+    // Check if system() call was successful (returns 0 on success)
+    if (ret == 0) {
+        return true;
+    } else {
+        return false;
+    }
 }
 
 /**
@@ -50,7 +60,6 @@ bool do_exec(int count, ...)
     command[count] = command[count];
 
 /*
- * TODO:
  *   Execute a system command by calling fork, execv(),
  *   and wait instead of system (see LSP page 161).
  *   Use the command[0] as the full path to the command to execute
@@ -58,8 +67,29 @@ bool do_exec(int count, ...)
  *   as second argument to the execv() command.
  *
 */
+    pid_t pid = fork();
+    if (pid < 0) {
+        // fork failed
+        return false;
+    } else if (pid == 0) {
+        // Child process: execute the command
+        execv(command[0], command);
+        // If execv returns, it failed
+        exit(1);
+    } else {
+        // Parent process: wait for child
+        int status;
+        if (waitpid(pid, &status, 0) == -1) {
+            return false;
+        }
 
-    va_end(args);
+        // Check if child exited normally with status 0
+        if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+            return true;
+        } else {
+            return false;
+        }
+    }
 
     return true;
 }
@@ -86,14 +116,48 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
 
 
 /*
- * TODO
- *   Call execv, but first using https://stackoverflow.com/a/13784315/1446624 as a refernce,
+ *   Call execv, but first using https://stackoverflow.com/a/13784315/1446624 as a reference,
  *   redirect standard out to a file specified by outputfile.
  *   The rest of the behaviour is same as do_exec()
  *
 */
 
-    va_end(args);
+    pid_t pid = fork();
+    if (pid < 0) {
+        // fork failed
+        return false;
+    } else if (pid == 0) {
+        // Child process: redirect stdout to outputfile, then execute the command
+        int fd = open(outputfile, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd < 0) {
+            exit(1);
+        }
+
+        // Redirect stdout to the file
+        if (dup2(fd, STDOUT_FILENO) < 0) {
+            close(fd);
+            exit(1);
+        }
+        close(fd);
+
+        // Execute the command
+        execv(command[0], command);
+        // If execv returns, it failed
+        exit(1);
+    } else {
+        // Parent process: wait for child
+        int status;
+        if (waitpid(pid, &status, 0) == -1) {
+            return false;
+        }
+
+        // Check if child exited normally with status 0
+        if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+            return true;
+        } else {
+            return false;
+        }
+    }
 
     return true;
 }
