@@ -5,6 +5,9 @@
 set -e
 set -u
 
+# Change to root directory where all files are located
+cd /
+
 NUMFILES=10
 WRITESTR=AELD_IS_FUN
 WRITEDIR=/tmp/aeld-data
@@ -32,7 +35,7 @@ echo "Writing ${NUMFILES} files containing string ${WRITESTR} to ${WRITEDIR}"
 rm -rf "${WRITEDIR}"
 
 # create $WRITEDIR if not assignment1
-assignment=$(cat ../conf/assignment.txt)
+assignment=$(cat conf/assignment.txt)
 
 if [ "$assignment" != 'assignment1' ]
 then
@@ -54,7 +57,19 @@ do
 	./writer "$WRITEDIR/${username}$i.txt" "$WRITESTR"
 done
 
+echo "Files created. Checking file contents:"
+ls -la "$WRITEDIR"
+echo "First file content:"
+cat "$WRITEDIR/${username}1.txt"
+
+echo "Running finder.sh..."
+set +e
 OUTPUTSTRING=$(./finder.sh "$WRITEDIR" "$WRITESTR")
+FINDER_EXIT=$?
+set -e
+
+echo "finder.sh exit code: $FINDER_EXIT"
+echo "OUTPUTSTRING value: '$OUTPUTSTRING'"
 
 # remove temporary directories
 rm -rf /tmp/aeld-data

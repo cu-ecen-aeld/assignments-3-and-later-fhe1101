@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 
 # Check for correct number of arguments
 if [ $# -ne 2 ]; then
@@ -18,8 +18,8 @@ fi
 # Count number of files (recursively)
 num_files=$(find "$filesdir" -type f | wc -l)
 
-# Count number of matching lines
-num_matches=$(grep -r --binary-files=without-match -F "$searchstr" "$filesdir" 2>/dev/null | wc -l)
+# Count number of matching lines - use grep -r without --binary-files option
+num_matches=$(grep -r "$searchstr" "$filesdir" 2>/dev/null | wc -l)
 
 echo "The number of files are $num_files and the number of matching lines are $num_matches"
 exit 0
