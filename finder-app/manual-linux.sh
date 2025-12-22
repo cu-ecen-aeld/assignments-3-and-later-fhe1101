@@ -13,6 +13,12 @@ FINDER_APP_DIR=$(realpath $(dirname $0))
 ARCH=arm64
 CROSS_COMPILE=aarch64-none-linux-gnu-
 
+# Use sudo only if not running as root
+SUDO=""
+if [ "$EUID" -ne 0 ]; then
+    SUDO="sudo"
+fi
+
 if [ $# -lt 1 ]
 then
 	echo "Using default directory ${OUTDIR} for output"
@@ -37,6 +43,12 @@ if [ ! -e ${OUTDIR}/linux-stable/arch/${ARCH}/boot/Image ]; then
     # Add your kernel build steps here
     make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} mrproper
     make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} defconfig
+
+    # Ensure initramfs/initrd support is enabled for all build environments
+    sed -i '/^.*CONFIG_BLK_DEV_INITRD/d' .config
+    echo "CONFIG_BLK_DEV_INITRD=y" >> .config
+    make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} olddefconfig
+
     make -j"$(nproc)" ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} all
 fi
 
@@ -48,7 +60,7 @@ cd "$OUTDIR"
 if [ -d "${OUTDIR}/rootfs" ]
 then
 	echo "Deleting rootfs directory at ${OUTDIR}/rootfs and starting over"
-    sudo rm  -rf ${OUTDIR}/rootfs
+    $SUDO rm  -rf ${OUTDIR}/rootfs
 fi
 
 # Create necessary base directories
@@ -72,9 +84,9 @@ mkdir -p ${OUTDIR}/rootfs/var/log
 cd "$OUTDIR"
 if [ ! -d "${OUTDIR}/busybox" ]
 then
-git clone https://github.com/mirror/busybox.git
+    echo "Cloning busybox..."
+    git clone --depth 1 --single-branch --branch ${BUSYBOX_VERSION} https://github.com/mirror/busybox.git
     cd busybox
-    git checkout ${BUSYBOX_VERSION}
     # Configure busybox (only on first clone)
     make distclean
     make defconfig
@@ -111,8 +123,8 @@ cp ${SYSROOT}/lib64/libresolv.so.2 ${OUTDIR}/rootfs/lib64/
 cp ${SYSROOT}/lib64/libc.so.6 ${OUTDIR}/rootfs/lib64/
 
 # Make device nodes
-sudo mknod -m 666 ${OUTDIR}/rootfs/dev/null c 1 3
-sudo mknod -m 622 ${OUTDIR}/rootfs/dev/console c 5 1
+$SUDO mknod -m 666 ${OUTDIR}/rootfs/dev/null c 1 3
+$SUDO mknod -m 622 ${OUTDIR}/rootfs/dev/console c 5 1
 
 # Clean and build the writer utility
 echo "Building the writer utility"
@@ -133,16 +145,21 @@ echo "FINDER_APP_DIR is ${FINDER_APP_DIR}"
 cp -rL ${FINDER_APP_DIR}/conf ${OUTDIR}/rootfs/
 cp ${FINDER_APP_DIR}/finder.sh ${OUTDIR}/rootfs/
 cp ${FINDER_APP_DIR}/finder-test.sh ${OUTDIR}/rootfs/
-cp ${FINDER_APP_DIR}/manual-linux.sh ${OUTDIR}/rootfs/
 cp ${FINDER_APP_DIR}/writer ${OUTDIR}/rootfs/
+cp ${FINDER_APP_DIR}/autorun-qemu.sh ${OUTDIR}/rootfs/home/
+
+# Also copy finder apps to /home for autorun-qemu.sh execution
+cp ${FINDER_APP_DIR}/finder.sh ${OUTDIR}/rootfs/home/
+cp ${FINDER_APP_DIR}/finder-test.sh ${OUTDIR}/rootfs/home/
+cp ${FINDER_APP_DIR}/writer ${OUTDIR}/rootfs/home/
 
 # Chown the root directory
 cd ${OUTDIR}/rootfs
-sudo chown -R root:root *
+$SUDO chown -R root:root *
 
 # Create initramfs.cpio.gz
 cd ${OUTDIR}/rootfs
-find . | cpio -H newc -ov --owner root:root > ${OUTDIR}/initramfs.cpio
+find . -print0 | cpio --null -ov -H newc --owner root:root > ${OUTDIR}/initramfs.cpio
 cd ${OUTDIR}
 gzip -f initramfs.cpio
 echo "initramfs.cpio.gz created at ${OUTDIR}/initramfs.cpio.gz"
