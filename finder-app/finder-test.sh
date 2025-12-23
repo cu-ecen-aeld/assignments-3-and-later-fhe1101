@@ -1,17 +1,15 @@
 #!/bin/sh
-# Tester script for assignment 1 and assignment 2
+# Tester script for assignment 3 and later
 # Author: Siddhant Jajoo
+# Modified to run with executables in PATH and config files in /etc/finder-app/conf
 
 set -e
 set -u
 
-# Change to root directory where all files are located
-cd /
-
 NUMFILES=10
 WRITESTR=AELD_IS_FUN
 WRITEDIR=/tmp/aeld-data
-username=$(cat conf/username.txt)
+username=$(cat /etc/finder-app/conf/username.txt)
 
 if [ $# -lt 3 ]
 then
@@ -35,7 +33,7 @@ echo "Writing ${NUMFILES} files containing string ${WRITESTR} to ${WRITEDIR}"
 rm -rf "${WRITEDIR}"
 
 # create $WRITEDIR if not assignment1
-assignment=$(cat conf/assignment.txt)
+assignment=$(cat /etc/finder-app/conf/assignment.txt)
 
 if [ "$assignment" != 'assignment1' ]
 then
@@ -54,7 +52,7 @@ fi
 
 for i in $( seq 1 $NUMFILES)
 do
-	./writer "$WRITEDIR/${username}$i.txt" "$WRITESTR"
+	writer "$WRITEDIR/${username}$i.txt" "$WRITESTR"
 done
 
 echo "Files created. Checking file contents:"
@@ -64,12 +62,15 @@ cat "$WRITEDIR/${username}1.txt"
 
 echo "Running finder.sh..."
 set +e
-OUTPUTSTRING=$(./finder.sh "$WRITEDIR" "$WRITESTR")
+OUTPUTSTRING=$(finder.sh "$WRITEDIR" "$WRITESTR")
 FINDER_EXIT=$?
 set -e
 
 echo "finder.sh exit code: $FINDER_EXIT"
 echo "OUTPUTSTRING value: '$OUTPUTSTRING'"
+
+# Write output to result file
+echo "$OUTPUTSTRING" > /tmp/assignment4-result.txt
 
 # remove temporary directories
 rm -rf /tmp/aeld-data
