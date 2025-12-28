@@ -2,7 +2,7 @@
 CROSS_COMPILE ?=
 CC = $(CROSS_COMPILE)gcc
 CFLAGS = -Wall -Werror
-LDFLAGS =
+LDFLAGS = -pthread
 
 # Default target
 all: aesdsocket
