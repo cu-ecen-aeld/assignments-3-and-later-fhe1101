@@ -243,15 +243,20 @@ int process_complete_packet(int *data_fd, char *packet_buffer, size_t packet_len
         return -1;
     }
 
-    // Unlock mutex after write is complete
+    // Keep the lock while sending file contents - file is being read
+    int send_result = send_file_contents_to_client(connection_fd);
+    
+    // Reopen the file while still holding the lock
+    *data_fd = open(DATA_FILE, O_CREAT | O_WRONLY | O_APPEND, 0644);
+    
+    // Now unlock
     pthread_mutex_unlock(&file_mutex);
 
-    if (send_file_contents_to_client(connection_fd) < 0) {
+    if (send_result < 0) {
         syslog(LOG_ERR, "Failed to send file contents to client");
         return -1;
     }
 
-    *data_fd = open(DATA_FILE, O_CREAT | O_WRONLY | O_APPEND, 0644);
     if (*data_fd < 0) {
         syslog(LOG_ERR, "Error reopening data file: %s", strerror(errno));
         return -1;
