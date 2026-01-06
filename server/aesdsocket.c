@@ -18,7 +18,16 @@
 #define PORT        9000
 #define BACKLOG     10
 #define BUFFER_SIZE 1024
+#define USE_AESD_CHAR_DEVICE 1
+#if USE_AESD_CHAR_DEVICE
+#define DATA_FILE   "/dev/aesdchar"
+#define OPEN_FLAGS  (O_WRONLY | O_APPEND)
+#define OPEN_MODE   0
+#else
 #define DATA_FILE   "/var/tmp/aesdsocketdata"
+#define OPEN_FLAGS  (O_CREAT | O_WRONLY | O_APPEND)
+#define OPEN_MODE   0644
+#endif
 #define TIMESTAMP_INTERVAL 10
 
 static int daemon_mode = 0;
@@ -59,17 +68,20 @@ int main(int argc, char *argv[]) {
         return -1;
     }
 
-    // Clean up any existing data file from previous runs
+    // Clean up any existing data file from previous runs (only if not using char device)
+#if !USE_AESD_CHAR_DEVICE
     if (unlink(DATA_FILE) < 0 && errno != ENOENT) {
         syslog(LOG_ERR, "Error deleting existing data file: %s", strerror(errno));
     }
+#endif
 
     // Daemonize if requested
     if (daemon_mode && daemonize() < 0) {
         return -1;
     }
 
-    // Create timer thread to write timestamps every 10 seconds
+    // Create timer thread to write timestamps every 10 seconds (only if not using char device)
+#if !USE_AESD_CHAR_DEVICE
     if (pthread_create(&timer_thread_id, NULL, timer_thread_function, NULL) != 0) {
         syslog(LOG_ERR, "Error creating timer thread: %s", strerror(errno));
         close(socket_fd);
@@ -77,6 +89,7 @@ int main(int argc, char *argv[]) {
         return -1;
     }
     timer_thread_created = 1;
+#endif
 
     // Main accept loop
     while (!shutdown_requested) {
@@ -190,10 +203,12 @@ void signal_handler(int sig) {
         pthread_join(timer_thread_id, NULL);
     }
 
-    // Delete the data file
+    // Delete the data file (only if not using char device)
+#if !USE_AESD_CHAR_DEVICE
     if (unlink(DATA_FILE) < 0 && errno != ENOENT) {
         syslog(LOG_ERR, "Error deleting data file: %s", strerror(errno));
     }
+#endif
 
     closelog();
     exit(0);
@@ -237,6 +252,16 @@ int process_complete_packet(int *data_fd, char *packet_buffer, size_t packet_len
     // Lock mutex before writing to file
     pthread_mutex_lock(&file_mutex);
 
+    // Lazy open: open the file descriptor only when needed
+    if (*data_fd < 0) {
+        *data_fd = open(DATA_FILE, OPEN_FLAGS, OPEN_MODE);
+        if (*data_fd < 0) {
+            syslog(LOG_ERR, "Error opening data file: %s", strerror(errno));
+            pthread_mutex_unlock(&file_mutex);
+            return -1;
+        }
+    }
+
     if (write(*data_fd, packet_buffer, packet_len) < 0) {
         syslog(LOG_ERR, "Error writing to data file: %s", strerror(errno));
         pthread_mutex_unlock(&file_mutex);
@@ -245,10 +270,11 @@ int process_complete_packet(int *data_fd, char *packet_buffer, size_t packet_len
 
     // Keep the lock while sending file contents - file is being read
     int send_result = send_file_contents_to_client(connection_fd);
-    
+
     // Reopen the file while still holding the lock
-    *data_fd = open(DATA_FILE, O_CREAT | O_WRONLY | O_APPEND, 0644);
-    
+    close(*data_fd);
+    *data_fd = open(DATA_FILE, OPEN_FLAGS, OPEN_MODE);
+
     // Now unlock
     pthread_mutex_unlock(&file_mutex);
 
@@ -394,7 +420,7 @@ int daemonize(void) {
  * Process a single client connection (called from thread)
  */
 void process_client_connection(struct sockaddr_in *client_addr, int connection_fd) {
-    int data_fd;
+    int data_fd = -1;  /* Initialize to -1 for lazy opening */
     char client_ip[INET_ADDRSTRLEN];
     char *packet_buffer = NULL;
     size_t packet_size = 0;
@@ -403,14 +429,6 @@ void process_client_connection(struct sockaddr_in *client_addr, int connection_f
     inet_ntop(AF_INET, &client_addr->sin_addr, client_ip, INET_ADDRSTRLEN);
     syslog(LOG_INFO, "Accepted connection from %s", client_ip);
 
-    // Open/create data file
-    data_fd = open(DATA_FILE, O_CREAT | O_WRONLY | O_APPEND, 0644);
-    if (data_fd < 0) {
-        syslog(LOG_ERR, "Error opening data file: %s", strerror(errno));
-        close(connection_fd);
-        return;
-    }
-
     // Handle client connection
     handle_client_connection(connection_fd, data_fd, &packet_buffer, &packet_size);
 
@@ -418,7 +436,9 @@ void process_client_connection(struct sockaddr_in *client_addr, int connection_f
     syslog(LOG_INFO, "Closed connection from %s", client_ip);
 
     // Cleanup
-    close(data_fd);
+    if (data_fd >= 0) {
+        close(data_fd);
+    }
     close(connection_fd);
 
     if (packet_buffer != NULL) {
@@ -458,7 +478,7 @@ void write_timestamp_to_file(void) {
     // Lock mutex for atomic write
     pthread_mutex_lock(&file_mutex);
 
-    data_fd = open(DATA_FILE, O_CREAT | O_WRONLY | O_APPEND, 0644);
+    data_fd = open(DATA_FILE, OPEN_FLAGS, OPEN_MODE);
     if (data_fd < 0) {
         syslog(LOG_ERR, "Error opening data file for timestamp: %s", strerror(errno));
         pthread_mutex_unlock(&file_mutex);
