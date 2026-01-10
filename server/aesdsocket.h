@@ -15,6 +15,12 @@ void signal_handler(int sig);
 int send_file_contents_to_client(int connection_fd);
 
 /**
+ * Check if packet is a seek command and handle it
+ * Returns 1 if it was a seek command (and was handled), 0 otherwise
+ */
+int handle_seek_command(int *data_fd, const char *packet_buffer, size_t packet_len, int connection_fd);
+
+/**
  * Process a complete packet: write to file and send file contents back to client
  */
 int process_complete_packet(int *data_fd, char *packet_buffer, size_t packet_len, int connection_fd);

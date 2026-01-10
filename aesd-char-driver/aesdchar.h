@@ -37,6 +37,7 @@ struct aesd_dev
     char *partial_write_buffer;  /* Buffer for incomplete writes (awaiting newline) */
     size_t partial_write_size;   /* Current size of partial write buffer */
     size_t partial_write_capacity; /* Allocated capacity of partial write buffer */
+     loff_t file_position;  /* Track current seek position */
 };
 
 

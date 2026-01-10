@@ -12,8 +12,10 @@
 #include <errno.h>
 #include <pthread.h>
 #include <time.h>
+#include <sys/ioctl.h>
 
 #include "aesdsocket.h"
+#include "../aesd-char-driver/aesd_ioctl.h"
 
 #define PORT        9000
 #define BACKLOG     10
@@ -246,9 +248,113 @@ int send_file_contents_to_client(int connection_fd) {
 }
 
 /**
+ * Check if packet is a seek command and handle it
+ * Returns 1 if it was a seek command (and was handled), 0 otherwise
+ */
+int handle_seek_command(int *data_fd, const char *packet_buffer, size_t packet_len, int connection_fd) {
+    const char *seek_prefix = "AESDCHAR_IOCSEEKTO:";
+    size_t prefix_len = strlen(seek_prefix);
+
+    /* Check if packet starts with the seek prefix */
+    if (packet_len <= prefix_len || strncmp(packet_buffer, seek_prefix, prefix_len) != 0) {
+        return 0; /* Not a seek command */
+    }
+
+    /* Parse X,Y from the command */
+    const char *comma_pos = (const char *)memchr(packet_buffer + prefix_len, ',', packet_len - prefix_len);
+    if (comma_pos == NULL) {
+        syslog(LOG_ERR, "Invalid seek command format: missing comma");
+        return 0;
+    }
+
+    /* Extract X (write_cmd) */
+    char *end_x;
+    unsigned long write_cmd = strtoul(packet_buffer + prefix_len, &end_x, 10);
+    if (end_x != comma_pos) {
+        syslog(LOG_ERR, "Invalid seek command format: invalid X value");
+        return 0;
+    }
+
+    /* Extract Y (write_cmd_offset) - skip comma and read until newline */
+    const char *newline_pos = (const char *)memchr(comma_pos, '\n', packet_len - (comma_pos - packet_buffer));
+    if (newline_pos == NULL) {
+        newline_pos = packet_buffer + packet_len; /* No newline, use end of packet */
+    }
+
+    char *end_y;
+    unsigned long write_cmd_offset = strtoul(comma_pos + 1, &end_y, 10);
+    if (end_y != newline_pos && end_y != packet_buffer + packet_len) {
+        syslog(LOG_ERR, "Invalid seek command format: invalid Y value");
+        return 0;
+    }
+
+    /* Ensure write_cmd and write_cmd_offset fit in uint32_t */
+    if (write_cmd > UINT32_MAX || write_cmd_offset > UINT32_MAX) {
+        syslog(LOG_ERR, "Seek command values out of range");
+        return 0;
+    }
+
+    syslog(LOG_INFO, "Processing seek command: write_cmd=%lu, write_cmd_offset=%lu", write_cmd, write_cmd_offset);
+
+    /* Lock mutex before ioctl */
+    pthread_mutex_lock(&file_mutex);
+
+    /* Ensure file descriptor is open */
+    if (*data_fd < 0) {
+        *data_fd = open(DATA_FILE, O_RDWR, 0);
+        if (*data_fd < 0) {
+            syslog(LOG_ERR, "Error opening data file for seek: %s", strerror(errno));
+            pthread_mutex_unlock(&file_mutex);
+            return 1; /* Was a seek command, even though it failed */
+        }
+    }
+
+    /* Prepare the seek structure */
+    struct aesd_seekto seekto;
+    seekto.write_cmd = (uint32_t)write_cmd;
+    seekto.write_cmd_offset = (uint32_t)write_cmd_offset;
+
+    /* Send ioctl command */
+    if (ioctl(*data_fd, AESDCHAR_IOCSEEKTO, &seekto) < 0) {
+        syslog(LOG_ERR, "ioctl AESDCHAR_IOCSEEKTO failed: %s", strerror(errno));
+        pthread_mutex_unlock(&file_mutex);
+        return 1; /* Was a seek command, even though it failed */
+    }
+
+    /* Now read and send file contents using the same file descriptor */
+    ssize_t file_bytes_read;
+    char read_buffer[BUFFER_SIZE];
+
+    while ((file_bytes_read = read(*data_fd, read_buffer, BUFFER_SIZE)) > 0) {
+        if (send(connection_fd, read_buffer, file_bytes_read, 0) < 0) {
+            syslog(LOG_ERR, "Error sending data to client: %s", strerror(errno));
+            break;
+        }
+    }
+
+    if (file_bytes_read < 0) {
+        syslog(LOG_ERR, "Error reading data file after seek: %s", strerror(errno));
+    }
+
+    /* Reopen the file in append mode for future writes */
+    close(*data_fd);
+    *data_fd = open(DATA_FILE, OPEN_FLAGS, OPEN_MODE);
+
+    pthread_mutex_unlock(&file_mutex);
+
+    return 1; /* Was a seek command */
+}
+
+/**
  * Process a complete packet: write to file and send file contents back to client
  */
 int process_complete_packet(int *data_fd, char *packet_buffer, size_t packet_len, int connection_fd) {
+    /* Check if this is a seek command */
+    if (handle_seek_command(data_fd, packet_buffer, packet_len, connection_fd)) {
+        return 0; /* Seek command handled */
+    }
+
+    /* Regular write command */
     // Lock mutex before writing to file
     pthread_mutex_lock(&file_mutex);
 
